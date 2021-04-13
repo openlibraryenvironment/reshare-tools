@@ -1,0 +1,373 @@
+---
+
+- hosts: '{{hosts}}'
+  connection: local
+  remote_user: user
+  become_method: sudo
+  vars_files:
+    - vars.yml
+  tasks:
+  - name: starting ssh
+    service:
+      name: ssh
+      state: started
+  - name: stopping syslog-ng
+    ignore_errors: yes
+    service:
+      name: syslog-ng
+      state: stopped
+  - name: starting syslog-ng
+    ignore_errors: yes
+    service:
+      name: syslog-ng
+      state: started
+  - name: starting postgres
+    when: install_pg
+    service:
+      name: postgresql
+      state: started
+
+### Install docker-compose
+  - name: Install docker-compose
+    become: yes
+    package:
+      name: docker-compose
+      state: present
+
+### Deal with kafka and zookeeper
+  - name: Create /opt/kafka-zk
+    file:
+      path: /opt/kafka-zk
+      state: directory
+      owner: root
+      group: root
+      mode: 0775
+      recurse: yes
+
+  - name: Create docker compose file for kafka
+    copy:
+      dest: /opt/kafka-zk/docker-compose.yml
+      content: |
+          version: '2'
+          services:
+            zookeeper:
+              image: wurstmeister/zookeeper
+              container_name: zookeeper
+              restart: always
+              ports:
+                - "2181:2181"
+            kafka:
+              image: wurstmeister/kafka
+              container_name: kafka
+              restart: always
+              ports:
+                - "9092:9092"
+                - "29092:29092"
+              environment:
+                KAFKA_LISTENERS: INTERNAL://:9092,LOCAL://:29092
+                KAFKA_ADVERTISED_LISTENERS: INTERNAL://{{ local_ip }}:9092,LOCAL://localhost:29092
+                KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: LOCAL:PLAINTEXT,INTERNAL:PLAINTEXT
+                KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+                KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+                KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+                KAFKA_BROKER_ID: 1
+                KAFKA_LOG_RETENTION_BYTES: -1
+                KAFKA_LOG_RETENTION_HOURS: -1
+
+  - name: Create kafka and zookeeper
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: cd /opt/kafka-zk && /usr/bin/docker-compose up -d
+
+### Create a log folder for logs
+  - name: Create /configs/logs
+    file:
+      path: /configs/logs
+      state: directory
+      owner: root
+      group: root
+      mode: 0775
+      recurse: yes
+
+### Start OKAPI
+  - name: Start OKAPI
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: cd /configs && java -Dhost={{ local_ip }} -Dokapiurl="http://{{ local_ip }}:9130" -Dport_end=9230 -Dstorage=postgres -Dpostgres_host={{ pg_host }} -Dpostgres_port={{ pg_port }} -Dpostgres_username={{ pg_okapi_user }} -Dpostgres_password={{ pg_okapi_pass }} -Dpostgres_database={{ pg_okapi_db }} -jar okapi/okapi-core/target/okapi-core-fat.jar dev > logs/okapi.log &
+
+### Waiting for OKAPI to get going
+  - name: Pausing for OKAPI Service to finsih starting
+    pause: seconds=15
+
+### Setup Tenants
+  - name: Setup Tenants http://folio-registry.aws.indexdata.com
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-type: application/json"
+      -d '{"urls" : ["http://folio-registry.aws.indexdata.com"]}'
+      http://localhost:9130/_/proxy/pull/modules
+
+  - name: Setup Tenants https://registry.reshare-dev.indexdata.com
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-type: application/json"
+      -d '{"urls" : ["https://registry.reshare-dev.indexdata.com"]}'
+      http://localhost:9130/_/proxy/pull/modules
+
+  - name: Setup Tenants reshare
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-type: application/json"
+      -d '{"id":"reshare","name":"ReShare","description":"ReShare Tenant"}'
+      http://localhost:9130/_/proxy/tenants
+
+  - name: Setup Tenants okapi
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-type: application/json"
+      -d '{"id":"okapi"}' \
+      http://localhost:9130/_/proxy/tenants/reshare/modules
+
+  - name: Setup OKAPI Environment DB_HOST
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d '{"name":"DB_HOST","value":"{{ pg_host }}"}'
+      http://localhost:9130/_/env
+
+  - name: Setup OKAPI Environment DB_PORT
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d '{"name":"DB_PORT","value":"{{ pg_port }}"}'
+      http://localhost:9130/_/env
+
+  - name: Setup OKAPI Environment DB_DATABASE
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d '{"name":"DB_DATABASE","value":"{{ pg_reshare_db }}"}'
+      http://localhost:9130/_/env
+
+  - name: Setup OKAPI Environment DB_USERNAME
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d '{"name":"DB_USERNAME","value":"{{ pg_reshare_user }}"}'
+      http://localhost:9130/_/env
+
+  - name: Setup OKAPI Environment DB_PASSWORD
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d '{"name":"DB_PASSWORD","value":"{{ pg_reshare_pass }}"}'
+      http://localhost:9130/_/env
+
+  - name: Setup OKAPI Environment EVENTS_PUBLISHER_BOOTSTRAP_SERVERS
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d '{"name":"EVENTS_PUBLISHER_BOOTSTRAP_SERVERS","value":"{{ local_ip }}:9092"}'
+      http://localhost:9130/_/env
+
+  - name: Setup OKAPI Environment EVENTS_CONSUMER_BOOTSTRAP_SERVERS
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d '{"name":"EVENTS_CONSUMER_BOOTSTRAP_SERVERS","value":"{{ local_ip }}:9092"}'
+      http://localhost:9130/_/env
+
+  - name: Setup OKAPI Environment KAFKA_HOST
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d '{"name":"KAFKA_HOST","value":"{{ local_ip }}"}'
+      http://localhost:9130/_/env
+
+  - name: Setup OKAPI Environment EVENTS_PUBLISHER_ZK_CONNECT
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d '{"name":"EVENTS_PUBLISHER_ZK_CONNECT","value":"{{ local_ip }}:2181"}'
+      http://localhost:9130/_/env
+
+  - name: Setup OKAPI Environment EVENTS_CONSUMER_ZK_CONNECT
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d '{"name":"EVENTS_CONSUMER_ZK_CONNECT","value":"{{ local_ip }}:2181"}'
+      http://localhost:9130/_/env
+
+## clone and install platform-rs
+  - name: clone platform-rs (ReShare) repo https://github.com/openlibraryenvironment/platform-rs.git
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: cd /configs && git clone https://github.com/openlibraryenvironment/platform-rs.git && cd platform-rs && git checkout {{ reshare_git_branch }}
+
+  - name: Editing config stripes.config.js
+    lineinfile: "dest=/configs/platform-rs/stripes.config.js state=present regexp='okapi: {' line=' okapi: { \\'url\\':\\'http://{{ local_ip }}:9130\\', \\'tenant\\':\\'reshare\\' },'"
+  
+  - name: ReShare platform-rs yarn install and build
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: cd /configs/platform-rs && n lts && yarn install && yarn build
+
+  - name: Copy the website into production folder cp -a output /usr/share/nginx/reshare
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: cd /configs/platform-rs && cp -a output /usr/share/nginx/reshare
+    
+  - name: Create nginx config /etc/nginx/sites-available/reshare
+    copy:
+      dest: /etc/nginx/sites-available/reshare
+      content: |
+          server {
+            listen 80;
+            server_name localhost;
+            charset utf-8;
+            # Serve index.html for any request not found
+            location / {
+              # Set path
+              root /usr/share/nginx/reshare;
+              include mime.types;
+              types {
+                text/plain lock;
+              }
+              try_files $uri /index.html;
+            }
+          }
+  - name: NGINX delete pre-existing enabled sites
+    find:
+      paths: /etc/nginx/sites-enabled/
+      patterns: "*"
+      file_type: link
+    register: nginx_site_enabled_links
+
+  - name: NGINX delete pre-existing enabled sites
+    file:
+      path: "{{ item.path }}"
+      state: absent
+    with_items: "{{ nginx_site_enabled_links.files }}"
+
+  - name: Enable nginx config
+    file: 
+      src: /etc/nginx/sites-available/reshare
+      dest: /etc/nginx/sites-enabled/reshare
+      state: link
+
+  - name: restarting NGINX
+    service:
+      name: nginx
+      state: restarted
+
+  - name: Editing config okapi-install.json
+    lineinfile: "dest=/configs/platform-rs/okapi-install.json state=present regexp='{{ item.name }}-\\d' line='    \"id\": \"{{ item.name }}-{{ item.version }}\",'"
+    loop: "{{ module_version_override|default([]) }}"
+    when: item.version != "default"
+  
+  - name: Turning on ReShare
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      cd /configs && 
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d @platform-rs/okapi-install.json
+      http://localhost:9130/_/proxy/tenants/reshare/install?deploy=true\&preRelease=false\&tenantParameters=loadReference%3Dtrue
+  
+  - name: Enabling UI Modules (Stripes)
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      cd /configs && 
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d @platform-rs/stripes-install.json
+      http://localhost:9130/_/proxy/tenants/reshare/install?preRelease=false
+
+### ReShare Default Admin
+### Install libjson-perl
+  - name: Install libjson-perl
+    become: yes
+    package:
+      name: libjson-perl
+      state: present
+    when: reshare_user_create
+
+### Install libwww-perl
+  - name: Install libwww-perl
+    become: yes
+    package:
+      name: libwww-perl
+      state: present
+    when: reshare_user_create
+
+### Install libuuid-tiny-perl
+  - name: Install libuuid-tiny-perl
+    become: yes
+    package:
+      name: libuuid-tiny-perl
+      state: present
+    when: reshare_user_create
+
+### see if the perl script already exists
+  - stat: path=/configs/bootstrap-superuser.pl
+    register: superuser_script
+
+### Downloading user creation perl script
+  - name: Download user creation perl script
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: cd /configs && wget https://raw.githubusercontent.com/folio-org/folio-install/master/runbooks/single-server/scripts/bootstrap-superuser.pl
+    when: reshare_user_create and not superuser_script.stat.exists
+
+### Install Admin user
+  - name: Install Admin user
+    become: yes
+    when: reshare_user_create
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      cd /configs &&
+      perl bootstrap-superuser.pl
+      --tenant reshare --user {{ reshare_admin_user }}
+      --password {{ reshare_admin_password }}
+      --okapi http://{{ local_ip }}:9130
+
+
+
+...

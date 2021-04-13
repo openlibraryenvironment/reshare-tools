@@ -1,0 +1,161 @@
+---
+
+- hosts: '{{hosts}}'
+  connection: local
+  remote_user: user
+  become_method: sudo
+  vars_files:
+    - vars.yml
+  tasks:
+  - name: starting ssh
+    service:
+      name: ssh
+      state: started
+  - name: starting syslog-ng
+    service:
+      name: syslog-ng
+      state: started
+  - user: name=user groups=sudo
+  - lineinfile: "dest=/etc/sudoers state=present regexp='^%sudo' line='%sudo ALL=(ALL) NOPASSWD: ALL'"
+
+  - name: apt-get update
+    become: true
+    ignore_errors: yes
+    shell: apt-get update
+
+### Change the password for "user"
+  - name: Change the password for "user"
+    become: true
+    shell: '/bin/echo -e "{{ os_user_password }}\n{{ os_user_password }}\n" | /usr/bin/passwd user'
+
+### Install git
+  - name: Install git
+    become: yes
+    package:
+      name: git
+      state: present
+### Install nodejs
+  - name: Install nodejs
+    become: yes
+    package:
+      name: nodejs
+      state: present
+### Install npm
+  - name: Install npm
+    become: yes
+    package:
+      name: npm
+      state: present
+### npm install global
+  - name: npm install global
+    become: true
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: npm install n -g && wget --quiet -O - https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add - && add-apt-repository "deb https://dl.yarnpkg.com/debian/ stable main" && apt-get update
+### Install yarn
+  - name: Install yarn
+    become: yes
+    package:
+      name: yarn
+      state: present
+### Install java
+  - name: Install java from vars preferences
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: apt-get -y install {{ jdk_version }} && update-java-alternatives --jre-headless --jre --set {{ jdk_headless_alt }}
+### Install yarn
+  - name: Install yarn
+    become: yes
+    package:
+      name: yarn
+      state: present
+### Install maven
+  - name: Install maven
+    become: yes
+    package:
+      name: maven
+      state: present
+
+### Install postgres
+  - name: Install postgres
+    become: yes
+    when: install_pg
+    package:
+      name: postgresql-all
+      state: present
+
+  - name: Allow postgres to talk outside
+    become: true
+    ignore_errors: yes
+    lineinfile: "dest=/etc/postgresql/12/main/postgresql.conf state=present regexp='max_connections' line='max_connections=500'"
+    when: install_pg
+
+  - name: Allow postgres to talk outside
+    become: true
+    ignore_errors: yes
+    lineinfile: "dest=/etc/postgresql/12/main/postgresql.conf state=present regexp='listen_addresses' line='listen_addresses=\\'*\\''"
+    when: install_pg
+
+  - name: Allow postgres to talk outside
+    become: true
+    ignore_errors: yes
+    lineinfile: "dest=/etc/postgresql/12/main/pg_hba.conf state=present regexp='host    all     all' line='host    all     all       0.0.0.0/0     md5'"
+    when: install_pg
+
+  - name: restarting postgres
+    when: install_pg
+    service:
+      name: postgresql
+      state: restarted
+
+### PG database init
+  - name: PG database init
+    become: yes
+    become_user: postgres
+    shell: psql -c "CREATE ROLE {{ pg_okapi_user }} WITH PASSWORD '{{ pg_okapi_pass }}' SUPERUSER LOGIN INHERIT CREATEDB CREATEROLE;"
+  - name: PG database init
+    become: yes
+    become_user: postgres
+    shell: psql -c "CREATE DATABASE {{ pg_okapi_db }} WITH OWNER {{ pg_okapi_user }};"
+  - name: PG database init
+    become: yes
+    become_user: postgres
+    shell: psql -c "CREATE ROLE {{ pg_reshare_user }} WITH PASSWORD '{{ pg_reshare_pass }}' SUPERUSER LOGIN INHERIT CREATEDB CREATEROLE;"
+  - name: PG database init
+    become: yes
+    become_user: postgres
+    shell: psql -c "CREATE DATABASE {{ pg_reshare_db }} WITH OWNER {{ pg_reshare_user }};"
+ 
+### clone and install okapi
+  - name: clone OKAPI repo
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: cd /configs && git clone --recursive https://github.com/folio-org/okapi.git && cd okapi && git checkout {{ okapi_git_branch }}
+### compile OKAPI (cd /configs/okapi && mvn install)
+  - name: Compile OKAPI (cd /configs/okapi && mvn install -DskipTests) This can take 10-20 minutes depending on your CPU
+    become: yes
+    shell: cd /configs/okapi && mvn install -DskipTests
+
+### Start OKAPI
+  - name: Start OKAPI and initialize the DB
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: cd /configs && java -Dpostgres_db_init=1 -Dhost={{ local_ip }} -Dokapiurl="http://{{ local_ip }}:9130" -Dport_end=9230 -Dstorage=postgres -Dpostgres_host={{ pg_host }} -Dpostgres_port={{ pg_port }} -Dpostgres_username={{ pg_okapi_user }} -Dpostgres_password={{ pg_okapi_pass }} -Dpostgres_database={{ pg_okapi_db }} -jar okapi/okapi-core/target/okapi-core-fat.jar dev &
+
+### Waiting for OKAPI to get going
+  - name: Pausing for OKAPI compile
+    pause: seconds=5
+
+  - name: Stopping postgres
+    when: install_pg
+    service:
+      name: postgresql
+      state: stopped
+
+
+
+
+...

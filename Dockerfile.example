@@ -1,0 +1,46 @@
+FROM ubuntu:20.04
+
+EXPOSE 22
+EXPOSE 80
+EXPOSE 443
+EXPOSE 5432
+EXPOSE 9130
+
+RUN useradd user -m -s /bin/bash
+RUN apt-get update
+RUN export DEBIAN_FRONTEND=noninteractive && ln -fs /usr/share/zoneinfo/America/Chicago /etc/localtime && apt-get install -y tzdata && dpkg-reconfigure --frontend noninteractive tzdata
+RUN apt-get -y install sendmail mailutils sendmail-bin logrotate ssh net-tools iputils-ping sudo nano make autoconf libtool git mlocate ansible git-core ntp cron screen curl software-properties-common gnupg2 vim nginx
+
+# Install docker binary
+RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+RUN add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+RUN apt-get update
+RUN apt-get install -y docker-ce
+
+RUN mkdir /configs
+RUN mkdir -p /mnt/reshare
+
+# Run dockerbase script
+ADD     syslog-ng.sh /configs/
+RUN     chmod +x /configs/syslog-ng.sh
+RUN     /configs/syslog-ng.sh
+
+# Add syslog-ng into runit
+ADD     build_syslog-ng.sh /etc/service/syslog-ng/run/syslog-ng.sh
+# Replace the system() source because inside Docker we can't access /proc/kmsg.
+# https://groups.google.com/forum/#!topic/docker-user/446yoB0Vx6w
+RUN	sed -i -E 's/^(\s*)system\(\);/\1unix-stream("\/dev\/log");/' /etc/syslog-ng/syslog-ng.conf
+# Uncomment 'SYSLOGNG_OPTS="--no-caps"' to avoid the following warning:
+# syslog-ng: Error setting capabilities, capability management disabled; error='Operation not permitted'
+# http://serverfault.com/questions/524518/error-setting-capabilities-capability-management-disabled#
+RUN	sed -i 's/^#\(SYSLOGNG_OPTS="--no-caps"\)/\1/g' /etc/default/syslog-ng
+
+
+ADD entrypoint.yml /configs/entrypoint.yml
+ADD install_base.yml /configs/install_base.yml
+ADD vars.yml /configs/vars.yml
+
+
+RUN cd /configs && ansible-playbook install_base.yml -v -e "hosts=127.0.0.1"
+ENTRYPOINT cd /configs && ansible-playbook entrypoint.yml -vvv -e "hosts=127.0.0.1" && while true; do sleep 1; done
+# ENTRYPOINT while true; do sleep 1; done
