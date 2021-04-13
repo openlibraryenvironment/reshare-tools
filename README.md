@@ -35,10 +35,12 @@ At the very least, you need to supply the IP address of this computer
 - Once the container is built, take note of the container ID
 - Start the final container and watch the console output
     - **Make sure that you replace the Docker ID in the command below**
-  ``docker attach `docker run -itd --privileged  -p 80:80 -p 443:443 -p 9130:9130 -p 5432:5432 -p 32:22 -v /var/run/docker.sock:/var/run/docker.sock -v ./vars.yml:/configs/vars.yml 2972d38b2b98` ``
+    - **Make sure that you /path/to/this/vars.yml**
+  ``docker attach `docker run -itd --privileged  -p 80:80 -p 443:443 -p 9130:9130 -p 5432:5432 -p 32:22 -v /var/run/docker.sock:/var/run/docker.sock -v /path/to/this/vars.yml:/configs/vars.yml 2972d38b2b98` ``
 - Alternatively without seeing the console output
     - **Make sure that you replace the Docker ID in the command below**
-`docker run -itd --privileged  -p 80:80 -p 443:443 -p 9130:9130 -p 5432:5432 -p 32:22 -v /var/run/docker.sock:/var/run/docker.sock -v ./vars.yml:/configs/vars.yml 2972d38b2b98`
+    - **Make sure that you /path/to/this/vars.yml**
+`docker run -itd --privileged  -p 80:80 -p 443:443 -p 9130:9130 -p 5432:5432 -p 32:22 -v /var/run/docker.sock:/var/run/docker.sock -v /path/to/this/vars.yml:/configs/vars.yml 2972d38b2b98`
 
 ## Rejoice
 
