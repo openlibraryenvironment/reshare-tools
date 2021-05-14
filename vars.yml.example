@@ -6,46 +6,46 @@
 
 # Local user account password for the container
 # For SSHing into the setup container
-  os_user_password: password
+os_user_password: password
 
 # OKAPI repo: https://github.com/folio-org/okapi.git
-  okapi_git_branch: tags/v4.7.2
+okapi_git_branch: tags/v4.7.2
 
 # reshare repo: https://github.com/openlibraryenvironment/platform-rs.git
-  reshare_git_branch: v1.0.0
+reshare_git_branch: v1.0.0
 
 # Used in this command: apt-get -y install openjdk-11-jdk nginx
 # Careful: Certain versions of java are required for certain versions of OKAPI
-  jdk_version: openjdk-11-jdk
+jdk_version: openjdk-11-jdk
 
 # Used in this command:update-java-alternatives --jre-headless --jre --set java-1.11.0-openjdk-amd64
-  jdk_headless_alt: java-1.11.0-openjdk-amd64
+jdk_headless_alt: java-1.11.0-openjdk-amd64
 
 # Install PostgreSQL?
-  install_pg: yes
+install_pg: yes
 
 # PG vars
-  pg_host: "{{ local_ip }}"
-  pg_port: 5432
-  pg_okapi_user: okapi
-  pg_okapi_pass: okapi25
-  pg_okapi_db: okapi
-  pg_reshare_user: reshare
-  pg_reshare_pass: reshare123
-  pg_reshare_db: reshare
+pg_host: "{{ local_ip }}"
+pg_port: 5432
+pg_okapi_user: okapi
+pg_okapi_pass: okapi25
+pg_okapi_db: okapi
+pg_reshare_user: reshare
+pg_reshare_pass: reshare123
+pg_reshare_db: reshare
 
 # ReShare Admin user
 # Disable this variable to prevent the auto-created user
-  reshare_user_create: yes
-  reshare_admin_user: reshare_admin
-  reshare_admin_password: admin
+reshare_user_create: yes
+reshare_admin_user: reshare_admin
+reshare_admin_password: admin
 
 
 # Full module version definition. These are not required to be defined.
 # If you prefer to define it and not change the default, set the version: default
 # Defaults with definitions in: https://github.com/openlibraryenvironment/platform-rs.git / okapi-install.json
 # You can override that file configuration
-  # module_version_override:
+# module_version_override:
   # - name: mod-users
     # version: 17.3.0
 
