@@ -56,31 +56,31 @@ Flag. No input required. Flip this flag in order to get more verbose runtime out
 
   - start
 
-As it would imply, "start" starts the ReShare server. This will automate the vars.yml file from the example file. If you've already customized your vars.yml file, it will use that. If you have not created your own vars.yml file it will create one from the example file. Your machine IP address will be auto-detected and configured. If the master container is already running, it will start the OKAPI service. If the container is not running but was* running, it will start the container from the stopped container. If a previous container doesn't exist, it will create one from the image. If an image doesn't exist, it will build the image from this directory.
+    As it would imply, "start" starts the ReShare server. This will automate the vars.yml file from the example file. If you've already customized your vars.yml file, it will use that. If you have not created your own vars.yml file it will create one from the example file. Your machine IP address will be auto-detected and configured. If the master container is already running, it will start the OKAPI service. If the container is not running but was* running, it will start the container from the stopped container. If a previous container doesn't exist, it will create one from the image. If an image doesn't exist, it will build the image from this directory.
 
   - stop
 
-This will stop the OKAPI service running within the master container. It will then also stop the postgres server running in the master container (if postgres configured). And finally it will stop the master container. The container will not be deleted.
+    This will stop the OKAPI service running within the master container. It will then also stop the postgres server running in the master container (if postgres configured). And finally it will stop the master container. The container will not be deleted.
 
   - stopokapi
 
-This will stop the OKAPI service running within the master container.
+    This will stop the OKAPI service running within the master container.
 
   - stopeverything
 
-This will cause the software to loop through all of the **running** containers and stop them **and delete them**. It does not delete images.
+    This will cause the software to loop through all of the **running** containers and stop them **and delete them**. It does not delete images.
 
   - rmi
 
-This does everything that "stop" does, plus take the extra step and delete the master Docker image.
+    This does everything that "stop" does, plus take the extra step and delete the master Docker image.
 
   - status
 
-Not implemeted yet
+    Not implemeted yet
 
   - change
 
-Not implemeted yet
+    Not implemeted yet
 
 ## How to use - manual method
 
