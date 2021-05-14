@@ -2,7 +2,7 @@
   
 # Configure to be the host machine accessable IP.
 # Basically the IP address of this host
-  local_ip: 192.168.1.100
+local_ip: 127.0.0.1
 
 # Local user account password for the container
 # For SSHing into the setup container

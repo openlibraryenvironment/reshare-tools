@@ -229,11 +229,23 @@
       http://localhost:9130/_/env
 
 ## clone and install platform-rs
+### see if we've already clone the repo
+  - stat: path=/configs/platform-rs
+    register: platform_git
+
   - name: clone platform-rs (ReShare) repo https://github.com/openlibraryenvironment/platform-rs.git
     become: yes
     environment:
       PATH: "{{ ansible_env.PATH }}"
     shell: cd /configs && git clone https://github.com/openlibraryenvironment/platform-rs.git && cd platform-rs && git checkout {{ reshare_git_branch }}
+    when: not platform_git.stat.exists
+
+  - name: If the repo existed, reset it
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: cd /configs/platform-rs && git reset --hard && git clean -x -f -d && git checkout {{ reshare_git_branch }}
+    when: platform_git.stat.exists
 
   - name: Editing config stripes.config.js
     lineinfile: "dest=/configs/platform-rs/stripes.config.js state=present regexp='okapi: {' line=' okapi: { \\'url\\':\\'http://{{ local_ip }}:9130\\', \\'tenant\\':\\'reshare\\' },'"
@@ -358,6 +370,7 @@
 ### Install Admin user
   - name: Install Admin user
     become: yes
+    ignore_errors: yes
     when: reshare_user_create
     environment:
       PATH: "{{ ansible_env.PATH }}"
