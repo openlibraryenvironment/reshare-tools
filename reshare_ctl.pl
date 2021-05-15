@@ -29,7 +29,7 @@ $SIG{INT} = \&cleanup;
 # We will try to automatically install the required perl modules
 # instead of asking them to do it :)
 
-my @modules = qw (Getopt::Long Cwd File::Path Data::Dumper Net::Address::IP::Local DateTime File::Copy utf8 Loghandler);
+my @modules = qw (Getopt::Long Cwd File::Path File::Copy Data::Dumper Net::Address::IP::Local utf8);
 
 doModuleDance(\@modules);
 
@@ -45,6 +45,8 @@ our %env;
 our $log = "$cwd/log_reshare_ctl.log";
 our $vars_file = "$cwd/vars.yml";
 our $vars_file_example = "$cwd/vars.yml.example";
+our $docker_file = "$cwd/Dockerfile";
+our $docker_file_example = "$cwd/Dockerfile.example";
 our $local_ip = Net::Address::IP::Local->public;
 
 
@@ -79,8 +81,7 @@ help() if(!$log);
 help() if(!$action);
 help() if( ($action ne 'start') && !($action =~ m/stop/) && ($action ne 'change') && ($action ne 'status') && ($action ne 'rmi') );
 
-$log = new Loghandler($log);
-$log->truncFile('');
+truncFile($log, '');
 
 # Sanity check the vars file
 checkVarsFile();
@@ -156,13 +157,28 @@ sub checkVarsFile
                 ," ","|",2) . 
                 "You can cancel execution now or press enter to continue\n" , 0
         );
-        my $l = new Loghandler($vars_file_example);
-        $l->copyFile($vars_file);
+        copyFile($vars_file_example, $vars_file);
         my $contents = editYML($local_ip,"local_ip",$vars_file,"replace");
         $contents =~ s/[\n\t]*$//g;
-        my $write = new Loghandler($vars_file);
-        $write->truncFile($contents);
-        undef $write;
+        truncFile($vars_file, $contents);
+        undef $contents;
+    }
+
+    # Dockerfile variant
+    if( !(-e $docker_file) )
+    {
+        if(!(-e $docker_file_example))
+        {
+            errorOut(boxText("Sorry, I can't find a Dockerfile file nor the example file."));
+        }
+        promptUser(
+            boxText("Dockerfile does not exist") .
+            boxText(
+                "I can create Dockerfile with defaults.\n"
+                ," ","|",2) . 
+                "You can cancel execution now or press enter to continue\n" , 0
+        );
+        copyFile($docker_file_example, $docker_file);
     }
 }
 
@@ -349,8 +365,7 @@ sub editYML
     my $dothis = shift;
     my @path = split(/\//,$yml_path);
 
-    my $fileRead = new Loghandler($file);
-    my @lines = @{$fileRead->readFile($file)};
+    my @lines = @{readFile($file)};
     my $depth = 0;
     my $ret = '';
     while(@lines[0])
@@ -410,16 +425,13 @@ sub readConfig
     my $ret = \%ret;
     my $file = shift;
 
-    my $confFile = new Loghandler($file);
-    if(!$confFile->fileExists())
+    if( !(-e $file) )
     {
         print "$file file does not exist\n";
-        undef $confFile;
         return false;
     }
 
-    my @lines = @{ $confFile->readFile() };
-    undef $confFile;
+    my @lines = @{ readFile($file) };
 
     foreach my $line (@lines)
     {
@@ -462,7 +474,7 @@ sub execSystemCMD
     my $cmd = shift;
     my $logit = shift;
     print "executing $cmd\n" if $debug;
-    $log->addLogLine($cmd) if $logit ne '0';
+    addLogLine($cmd) if $logit ne '0';
     system($cmd) == 0
         or die "system '$cmd' failed: $?";
 }
@@ -473,7 +485,7 @@ sub execSystemCMDWithReturn
     my $dont_trim = shift;
     my $ret;
     print "executing $cmd\n" if $debug;
-    $log->addLogLine($cmd);
+    addLogLine($cmd);
     open(DATA, $cmd.'|');
     my $read;
     while($read = <DATA>)
@@ -504,30 +516,6 @@ sub execDockerCMD
         print "We've encountered a problem executing a command on docker: '$docker_name' . \nIt doesn't exist!\n";
         exit;
     }
-}
-
-sub getAllMasterDBEntries
-{
-    my @ret = ();
-    my $active_only = shift;
-    $active_only = "WHERE active" if $active_only;
-    my $query = "SELECT ";
-    $query .= "$_ ,\n" foreach(@master_db_columns);
-    $query = substr($query,0,-2); # remove the last comma
-    $query .= " FROM config $active_only ORDER BY id";
-    $log->addLogLine($query) if $debug;
-    my @results = @{$dbHandlerMaster->query($query)};
-    foreach(@results)
-    {
-        my @row = @{$_};
-        my %this_one = ();
-        for my $i(0..$#master_db_columns)
-        {
-            $this_one{@master_db_columns[$i]} = @row[$i];
-        }
-        push (@ret, \%this_one);
-    }
-    return \@ret;
 }
 
 sub promptUser
@@ -575,7 +563,6 @@ sub errorOut
     print "\n";
     exit;
 }
-
 
 sub boxText
 {
@@ -734,6 +721,75 @@ sub stopAllContainers
         stopContainer($_,1);
     }
 }
+
+sub truncFile
+{
+    my $file = shift;
+    my $line = shift;
+    open(OUTPUT, '> '.$file) or $ret=0;
+    binmode(OUTPUT, ":utf8");
+    print OUTPUT "$line\n";
+    close(OUTPUT);
+}
+
+
+sub addLogLine
+{
+    my $line = shift;
+    open(OUTPUT, '>> '.$log) or $ret=0;
+    binmode(OUTPUT, ":utf8");
+    print OUTPUT "$line\n";
+    close(OUTPUT);
+}
+
+sub copyFile
+{
+    my $file = shift;
+    my $destination = shift;
+    return copy($file, $destination);
+}
+
+sub readFile
+{
+    my $file = shift;
+    my $trys=0;
+    my $failed=0;
+    my @lines;
+    #print "Attempting open\n";
+    if(-e $file)
+    {
+        my $worked = open (inputfile, '< '. $file);
+        if(!$worked)
+        {
+            print "******************Failed to read file*************\n";
+        }
+        binmode(inputfile, ":utf8");
+        while (!(open (inputfile, '< '. $file)) && $trys<100)
+        {
+            print "Trying again attempt $trys\n";
+            $trys++;
+            sleep(1);
+        }
+        if($trys<100)
+        {
+            #print "Finally worked... now reading\n";
+            @lines = <inputfile>;
+            close(inputfile);
+        }
+        else
+        {
+            print "Attempted $trys times. COULD NOT READ FILE: $file\n";
+        }
+        close(inputfile);
+    }
+    else
+    {
+        print "File does not exist: $file\n";
+    }
+    return \@lines;
+}
+
+
 
 sub DESTROY
 {

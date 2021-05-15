@@ -24,12 +24,6 @@ This code will automate the installation of a ReShare server.
 
 ### Quick start
 
-- let Perl know about this folder
-
-`export PERL5LIB=/path/to/this/folder`
-
-- Just do it
-
 `./reshare_ctl --action start`
 
 ### More things about reshare_ctl.pl
