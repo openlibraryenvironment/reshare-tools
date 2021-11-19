@@ -249,12 +249,29 @@
 
   - name: Editing config stripes.config.js
     lineinfile: "dest=/configs/platform-rs/stripes.config.js state=present regexp='okapi: {' line=' okapi: { \\'url\\':\\'http://{{ local_ip }}:9130\\', \\'tenant\\':\\'reshare\\' },'"
-  
+
+## NVM version hack
+  - name: Install Node 12.22.7 - known good version
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: source /root/.nvm/nvm.sh && cd /configs/platform-rs && nvm install v12.22.7 && nvm use 12.22.7
+    args:
+      executable: /bin/bash
+
+  - name: ReShare platform-rs yarn config setup
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: cd /configs/platform-rs && yarn config set @folio:registry https://repository.folio.org/repository/npm-folio/
+
   - name: ReShare platform-rs yarn install and build
     become: yes
     environment:
       PATH: "{{ ansible_env.PATH }}"
-    shell: cd /configs/platform-rs && n lts && yarn install && yarn build
+    shell: source /root/.nvm/nvm.sh && cd /configs/platform-rs && nvm use 12.22.7 && yarn install && yarn build
+    args:
+      executable: /bin/bash
 
   - name: Copy the website into production folder cp -a output /usr/share/nginx/reshare
     become: yes
