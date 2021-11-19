@@ -52,6 +52,12 @@
     environment:
       PATH: "{{ ansible_env.PATH }}"
     shell: npm install n -g && wget --quiet -O - https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add - && add-apt-repository "deb https://dl.yarnpkg.com/debian/ stable main" && apt-get update
+## NVM
+  - name: Get NVM manager setup
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: cd /configs && curl -sL https://raw.githubusercontent.com/nvm-sh/nvm/v0.35.0/install.sh -o install_nvm.sh && bash install_nvm.sh
 ### Install yarn
   - name: Install yarn
     become: yes
