@@ -9,10 +9,10 @@ local_ip: 127.0.0.1
 os_user_password: password
 
 # OKAPI repo: https://github.com/folio-org/okapi.git
-okapi_git_branch: tags/v4.7.2
+okapi_git_branch: tags/v4.8.2
 
 # reshare repo: https://github.com/openlibraryenvironment/platform-rs.git
-reshare_git_branch: v1.0.0
+reshare_git_branch: v1.5.x
 
 # Used in this command: apt-get -y install openjdk-11-jdk nginx
 # Careful: Certain versions of java are required for certain versions of OKAPI
