@@ -29,7 +29,7 @@ $SIG{INT} = \&cleanup;
 # We will try to automatically install the required perl modules
 # instead of asking them to do it :)
 
-my @modules = qw (Getopt::Long Cwd File::Path File::Copy Data::Dumper Net::Address::IP::Local utf8);
+my @modules = qw (Getopt::Long Cwd File::Path File::Copy Data::Dumper Net::Address::IP::Local utf8 LWP JSON URI::Escape);
 
 doModuleDance(\@modules);
 
@@ -79,7 +79,7 @@ $action = lc $action;
 # Make sure the user supplied ALL of the options
 help() if(!$log);
 help() if(!$action);
-help() if( ($action ne 'start') && !($action =~ m/stop/) && ($action ne 'change') && ($action ne 'status') && ($action ne 'rmi') );
+help() if( ($action ne 'start') && !($action =~ m/stop/) && ($action ne 'change') && ($action ne 'status') && ($action ne 'rmi') && !($action =~ m/setup/) );
 
 truncFile($log, '');
 
@@ -111,6 +111,11 @@ elsif( $action =~ m/rmi/ )
 {
     dealWithMasterImage($action);
     $finishText = "Master Container deleted$finishText";
+}
+elsif( $action =~ m/setup/ )
+{
+    dealWithSetupTestData($action);
+    $finishText = "Installed Test Data$finishText";
 }
 else
 {
@@ -288,7 +293,7 @@ sub dealWithMasterImage
             stopContainer($kafkaFullName, 1);
             stopContainer($zookeeperFullName, 1);
             my $cmd = "docker run -d --privileged  -p 80:80 -p 443:443 -p 9130:9130 -p 5432:5432 -p 32:22 -v /var/run/docker.sock:/var/run/docker.sock -v $vars_file:/configs/vars.yml $imageName &";
-            execSystemCMD($cmd);
+            execSystemCMD($cmd, 1);
         }
     }
     elsif($do =~ /stop/ && !$runningContainer && !$ignoreStopped)
@@ -318,6 +323,93 @@ sub dealWithMasterImage
         my $cmd = "docker rmi $imageName";
         execSystemCMD($cmd);
     }
+}
+
+sub dealWithSetupTestData
+{
+    my $do = shift;
+    my $cardinalJSON = '{ '.
+    '"name":"Cardinal test Consortium", '.
+    '"slug":"CARDINAL", '.
+    '"foafUrl":"http://$local_ip/cardinal.json", '.
+    '"url":"http://not.a.real.consortium/", '.
+    '"type":"Consortium", '.
+    '"members":[ '.
+        ' { "memberOrg":"us-east-1"}, '.
+        ' { "memberOrg":"us-west-1"} '.
+    '], '.
+    '"friends":[ '.
+        '{ "foaf": "https://east-okapi.folio-dev.indexdata.com/_/invoke/tenant/reshare_east/directory/externalApi/entry/us-east-1" }, '.
+        '{ "foaf": "https://west-okapi.folio-dev.indexdata.com/_/invoke/tenant/reshare_west/directory/externalApi/entry/us-west-1" } '.
+    '] }';
+
+    if($do eq 'setuptestbranches')
+    {
+        my $imageName = getDockerID($masterLabel, 0, 1);
+        my $runningContainer = getDockerID($imageName);
+        if($runningContainer)
+        {
+            $cardinalJSON =~ s/"/\\\\"/g;
+            my $cmd = "sh -c \"echo $cardinalJSON > /usr/share/nginx/reshare/cardinal.json\"";
+            execDockerCMD($imageName, $cmd, 1);
+            my $authtoken = loginOKAPI();
+            if($authtoken)
+            {
+                sendConsortiumSetup($authtoken);
+            }
+            else
+            {
+                promptUser(boxText("Couldn't get logged into reshare. Check your vars.yml for correct admin login creds.") );
+                exit;
+            }
+        }
+        else
+        {
+            promptUser(boxText("Cannot find master container") );
+        }
+    }
+}
+
+sub sendConsortiumSetup
+{
+    my $authtoken = shift;
+    my $header = [
+        'X-Okapi-Tenant' => 'reshare',
+        'X-Okapi-Token' => $authtoken
+        ];
+    my $cardinalURL = "http://$local_ip/cardinal.json";
+    $cardinalURL = uri_escape($cardinalURL);
+    my $url = "/directory/api/addFriend?friendUrl=$cardinalURL";
+    my $answer = runHTTPReq($header,'', "GET", $url);
+    print Dumper($answer);
+    exit;
+}
+
+sub loginOKAPI
+{
+    my $header = [
+        'X-Okapi-Tenant' => 'reshare'
+        ];
+    my $user = {
+        username => $env{"reshare_admin_user"},
+        password => $env{"reshare_admin_password"}
+        };
+    my $answer = runHTTPReq($header, encode_json($user), "POST", "/authn/login");
+    return $answer->header("x-okapi-token") if($answer->is_success);
+    return 0;
+}
+
+sub runHTTPReq
+{
+    my $header = shift;
+    my $payload = shift;
+    my $type = shift;
+    my $url = shift;
+    push(@{$header}, ( 'Content-Type' => 'application/json', 'Accept' => 'application/json, text/plain') );
+    my $okapi = "http://$local_ip:9130";
+    my $ua = LWP::UserAgent->new();
+    my $req = HTTP::Request->new($type, "$okapi$url", $header, $payload);
+    return $ua->request($req);
 }
 
 sub checkPorts
@@ -474,7 +566,7 @@ sub execSystemCMD
     my $cmd = shift;
     my $logit = shift;
     print "executing $cmd\n" if $debug;
-    addLogLine($cmd) if $logit ne '0';
+    addLogLine($cmd) if $logit;
     system($cmd) == 0
         or die "system '$cmd' failed: $?";
 }
@@ -655,18 +747,27 @@ sub doModuleDance
     my $modules = shift;
     my @modules = @{$modules};
     my $needToInstall = 0;
+    my @notInstalled = ();
+    my $list = "";
     foreach(@modules)
     {
         local $@;
         eval "use $_;";
-        promptUser(boxText("This system does not have the required perl modules installed.\nAuto install?")) if $@ and !$needToInstall;
-        $needToInstall = 1 if $@;
-        installModule($_) if $@;
-        # Try again after it's been supposedly installed
-        local $@;
-        eval "use $_;";
-        print "Please install the perl module:\n$_\n and try again\n" if $@;
-        exit if $@;
+        push(@notInstalled, $_) if $@;
+        $list .= "$_\n" if $@;
+    }
+    if($#notInstalled > -1)
+    {
+        promptUser(boxText("This system does not have the required perl modules installed.\n$list\nAuto install?"));
+        foreach(@notInstalled)
+        {
+            installModule($_);
+            # Try again after it's been supposedly installed
+            local $@;
+            eval "use $_;";
+            print "Please install the perl module:\n$_\n and try again\n" if $@;
+            exit if $@;
+        }
     }
 }
 
@@ -693,7 +794,7 @@ sub isPortUsed
 sub installModule
 {
     my $module = shift;
-    my $cmd = "export PERL_MM_USE_DEFAULT=1 && /usr/bin/perl -MCPAN -e 'install $module'";
+    my $cmd = "export PERL_MM_USE_DEFAULT=1 && /usr/bin/perl -MCPAN -e 'install \"$module\"'";
     print boxText("executing:\n$cmd","#","|",2);
     sleep 1;
     execSystemCMD($cmd, 0);
