@@ -37,7 +37,7 @@ pg_reshare_db: reshare
 # ReShare Admin user
 # Disable this variable to prevent the auto-created user
 reshare_user_create: yes
-reshare_admin_user: reshare_admin
+reshare_admin_user: admin
 reshare_admin_password: admin
 
 

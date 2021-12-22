@@ -12,6 +12,7 @@ This code will automate the installation of a ReShare server.
 - Make sure your host machine is not using the following ports
   - 32
   - 80
+  - 81
   - 443
   - 5432
   - 9130-9230
@@ -24,7 +25,7 @@ This code will automate the installation of a ReShare server.
 
 ### Quick start
 
-`./reshare_ctl --action start`
+`chmod 755 reshare_ctl.pl && ./reshare_ctl.pl --action start`
 
 ### More things about reshare_ctl.pl
 
@@ -107,16 +108,17 @@ At the very least, you need to supply the IP address of this computer
 - **Make sure that you replace the Docker ID in the command below**
 - **Make sure that you fill in the path for: /path/to/this/vars.yml**
 
-  ``docker attach `docker run -itd --privileged  -p 80:80 -p 443:443 -p 9130:9130 -p 5432:5432 -p 32:22 -v /var/run/docker.sock:/var/run/docker.sock -v /path/to/this/vars.yml:/configs/vars.yml 2972d38b2b98` ``
+  ``docker attach `docker run -itd --privileged  -p 80:80 -p 81:81 -p 443:443 -p 9130:9130 -p 5432:5432 -p 32:22 -v /var/run/docker.sock:/var/run/docker.sock -v /path/to/this/vars.yml:/configs/vars.yml 2972d38b2b98` ``
 
 - Alternatively without seeing the console output
     - **Make sure that you replace the Docker ID in the command below**
     - **Make sure that you fill in the path for: /path/to/this/vars.yml**
 
-  `docker run -itd --privileged  -p 80:80 -p 443:443 -p 9130:9130 -p 5432:5432 -p 32:22 -v /var/run/docker.sock:/var/run/docker.sock -v /path/to/this/vars.yml:/configs/vars.yml 2972d38b2b98`
+  `docker run -itd --privileged  -p 80:80 -p 81:81 -p 443:443 -p 9130:9130 -p 5432:5432 -p 32:22 -v /var/run/docker.sock:/var/run/docker.sock -v /path/to/this/vars.yml:/configs/vars.yml 2972d38b2b98`
 
 ## Rejoice
 
 You now have a working server. You can hit the server with a web browser:
 
-  `http://<ip address>`
+  - Dev1 Tenant: `http://<ip address>`
+  - Dev2 Tenant: `http://<ip address>:81`

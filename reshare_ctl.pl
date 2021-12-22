@@ -29,7 +29,7 @@ $SIG{INT} = \&cleanup;
 # We will try to automatically install the required perl modules
 # instead of asking them to do it :)
 
-my @modules = qw (Getopt::Long Cwd File::Path File::Copy Data::Dumper Net::Address::IP::Local utf8 LWP JSON URI::Escape);
+my @modules = qw (Getopt::Long Cwd File::Path File::Copy Data::Dumper Net::Address::IP::Local utf8 LWP JSON URI::Escape Data::UUID);
 
 doModuleDance(\@modules);
 
@@ -275,6 +275,7 @@ sub dealWithMasterImage
                   "-Dpostgres_username=" . $env{"pg_okapi_user"} . " ".
                   "-Dpostgres_password=" . $env{"pg_okapi_pass"} . " ".
                   "-Dpostgres_database=" . $env{"pg_okapi_db"} . " ".
+                  "-DdockerRegistries=\\\"[{}, {'registry': 'knowledgeintegration', 'serveraddress': 'docker.libsdev.k-int.com' }]\\\" " .
                   "-jar okapi/okapi-core/target/okapi-core-fat.jar dev > logs/okapi.log &\"";
                   execDockerCMD($imageName, $cmd, 1);
             }
@@ -292,7 +293,18 @@ sub dealWithMasterImage
             print "Master container is not running and needs to be created\n";
             stopContainer($kafkaFullName, 1);
             stopContainer($zookeeperFullName, 1);
-            my $cmd = "docker run -d --privileged  -p 80:80 -p 443:443 -p 9130:9130 -p 5432:5432 -p 32:22 -v /var/run/docker.sock:/var/run/docker.sock -v $vars_file:/configs/vars.yml $imageName &";
+            my $cmd = 
+            "docker run -d --privileged ".
+            "-p 80:80 " .
+            "-p 81:81 " .
+            "-p 443:443 " .
+            "-p 9130:9130 " .
+            "-p 5432:5432 " .
+            "-p 32:22 " .
+            "-v /var/run/docker.sock:/var/run/docker.sock " .
+            "-v $vars_file:/configs/vars.yml " .
+            "-v /mnt/evergreen/docker/reshare/entrypoint.yml:/configs/entrypoint.yml " .
+            "$imageName &";
             execSystemCMD($cmd, 1);
         }
     }
@@ -328,6 +340,7 @@ sub dealWithMasterImage
 sub dealWithSetupTestData
 {
     my $do = shift;
+    my @tenants = ("dev1_tenant","dev2_tenant");
     my $cardinalJSON = '{ '.
     '"name":"Cardinal test Consortium", '.
     '"slug":"CARDINAL", '.
@@ -335,48 +348,93 @@ sub dealWithSetupTestData
     '"url":"http://not.a.real.consortium/", '.
     '"type":"Consortium", '.
     '"members":[ '.
-        ' { "memberOrg":"us-east-1"}, '.
-        ' { "memberOrg":"us-west-1"} '.
+        ' { "memberOrg":"dev1"}, '.
+        ' { "memberOrg":"dev2"} '.
     '], '.
     '"friends":[ '.
-        '{ "foaf": "https://east-okapi.folio-dev.indexdata.com/_/invoke/tenant/reshare_east/directory/externalApi/entry/us-east-1" }, '.
-        '{ "foaf": "https://west-okapi.folio-dev.indexdata.com/_/invoke/tenant/reshare_west/directory/externalApi/entry/us-west-1" } '.
+        '{ "foaf": "http://$local_ip:9130/_/invoke/tenant/dev1_tenant/directory/externalApi/entry/dev1" }, '.
+        '{ "foaf": "https://$local_ip:9130/_/invoke/tenant/dev2_tenant/directory/externalApi/entry/dev2" } '.
     '] }';
 
-    if($do eq 'setuptestbranches')
+    my $imageName = getDockerID($masterLabel, 0, 1);
+    my $runningContainer = getDockerID($imageName);
+    if($runningContainer)
     {
-        my $imageName = getDockerID($masterLabel, 0, 1);
-        my $runningContainer = getDockerID($imageName);
-        if($runningContainer)
+        foreach(@tenants)
         {
-            $cardinalJSON =~ s/"/\\\\"/g;
-            my $cmd = "sh -c \"echo $cardinalJSON > /usr/share/nginx/reshare/cardinal.json\"";
-            execDockerCMD($imageName, $cmd, 1);
-            my $authtoken = loginOKAPI();
+            my $tenant = $_;
+            my $authtoken = loginOKAPI($tenant);
             if($authtoken)
             {
-                sendConsortiumSetup($authtoken);
+                print "Logged in!\n" if $debug;
             }
             else
             {
-                promptUser(boxText("Couldn't get logged into reshare. Check your vars.yml for correct admin login creds.") );
+                promptUser(boxText("Couldn't get logged into $tenant. Check your vars.yml for correct admin login creds.") );
                 exit;
             }
-        }
-        else
-        {
-            promptUser(boxText("Cannot find master container") );
+            if($do eq 'setuptestbranches')
+            {
+                $cardinalJSON =~ s/"/\\\\"/g;
+                my $cmd = "sh -c \"echo $cardinalJSON > /usr/share/nginx/dev1/cardinal.json\"";
+                execDockerCMD($imageName, $cmd, 1);
+                sendConsortiumSetup($authtoken);
+                
+            }
+            elsif($do eq 'setupserviceaccounts')
+            {
+                my %accountDef =
+                (
+                    'address' => "http://$local_ip:9130/_/invoke/tenant/$tenant/rs/externalApi/statistics",
+                    'businessFunction' => "rs_stats",
+                    'name' => "RS_STATS",
+                    'status' => 'managed',
+                    'type' => "http",
+                    'id' => getNewUUID()
+                );
+                createDirectoryServiceAccount($authtoken, $tenant, \%accountDef);
+                %accountDef =
+                (
+                    'address' => "http://$local_ip:9130/_/invoke/tenant/$tenant/rs/externalApi/iso18626",
+                    'businessFunction' => "ill",
+                    'name' => "ISO18626",
+                    'status' => 'managed',
+                    'type' => "iso18626",
+                    'id' => getNewUUID()
+                );
+                createDirectoryServiceAccount($authtoken, $tenant, \%accountDef);
+            }
+            elsif($do eq 'setupinstitutions')
+            {
+                # my @serviceAccounts = @{getExistingDirectoryServiceAccounts($authtoken, $tenant)};
+                getDirectoryRef($authtoken, $tenant, "DirectoryEntry.Type");
+            }
         }
     }
+    else
+    {
+        promptUser(boxText("Cannot find master container") );
+    }
+}
+
+sub standardAuthHeader
+{
+    my $authtoken = shift;
+    my $tenant = shift;
+
+    my $header = [
+        'X-Okapi-Tenant' => $tenant,
+        'X-Okapi-Token' => $authtoken
+        ];
+    return $header;
 }
 
 sub sendConsortiumSetup
 {
     my $authtoken = shift;
-    my $header = [
-        'X-Okapi-Tenant' => 'reshare',
-        'X-Okapi-Token' => $authtoken
-        ];
+    my $tenant = shift;
+    my $header = standardAuthHeader($authtoken, $tenant);
+    
     my $cardinalURL = "http://$local_ip/cardinal.json";
     $cardinalURL = uri_escape($cardinalURL);
     my $url = "/directory/api/addFriend?friendUrl=$cardinalURL";
@@ -385,10 +443,101 @@ sub sendConsortiumSetup
     exit;
 }
 
+sub getExistingDirectoryServiceAccounts
+{
+    my $authtoken = shift;
+    my $tenant = shift;
+    my $header = standardAuthHeader($authtoken, $tenant);
+    my $resp = runHTTPReq($header, undef, "GET", "/directory/service?filters=status.value=managed&perPage=100&sort=id");
+    my $ret = decode_json($resp->content);
+    return $ret;
+}
+
+sub createDirectoryServiceAccount
+{
+    my $authtoken = shift;
+    my $tenant = shift;
+    my $defRef = shift;
+    my %def = %{$defRef};
+
+    my $header = standardAuthHeader($authtoken, $tenant);
+
+    my %options = %{getDirectoryServiceDropdownOptions($authtoken, $tenant)};
+
+    while ( (my $key, my $option) = each(%options) )
+    {
+        while ( (my $defkey, my $defoption) = each(%def) )
+        {
+            if($defkey eq $key)  # we have a dropdown menu key that needs converted into the server ID equivalent.
+            {
+                my $convert = $defoption;
+                my @list = @{$option};
+                foreach(@list)
+                {
+                    my %menuItem = %{$_};
+                    print "Checking '".$menuItem{"value"}."'\n" if $debug;
+                    if($menuItem{"value"} eq $defoption)
+                    {
+                        $convert = $menuItem{"id"};
+                        print "Converted '$defoption' to '$convert'\n" if $debug;
+                    }
+                }
+                $def{$defkey} = $convert;
+            }
+        }
+    }
+    runHTTPReq($header, encode_json(\%def), "POST", "/directory/service");
+}
+
+sub getDirectoryServiceDropdownOptions
+{
+    my $authtoken = shift;
+    my $tenant = shift;
+    my $header = standardAuthHeader($authtoken, $tenant);
+    my %dropdowns = 
+    (
+        'businessFunction' => "Service.BusinessFunction",
+        'type' => "Service.Type"
+    );
+    my %ret = ();
+    while ( (my $internal, my $querystring) = each(%dropdowns) )
+    {
+        $ret{$internal} = getDirectoryRef($authtoken, $tenant, $querystring);
+    }
+    return \%ret;
+}
+
+sub getDirectoryRef
+{
+    my $authtoken = shift;
+    my $tenant = shift;
+    my $type = shift;
+    my $header = standardAuthHeader($authtoken, $tenant);
+    my @ret = ();
+    my $url = "/directory/refdata?filters=desc=$type";
+    print "$url\n";
+    my $response = runHTTPReq($header, undef, "GET", $url);
+    my $stuff = decode_json($response->content);
+    my @vals = @{$stuff};
+    foreach(@vals)
+    {
+        if(%{$_}{"values"})
+        {
+            my @answers = @{%{$_}{"values"}};
+            foreach(@answers)
+            {
+                push (@ret, $_);
+            }
+        }
+    }
+    return \@ret;
+}
+
 sub loginOKAPI
 {
+    my $tenant = shift;
     my $header = [
-        'X-Okapi-Tenant' => 'reshare'
+        'X-Okapi-Tenant' => $tenant
         ];
     my $user = {
         username => $env{"reshare_admin_user"},
@@ -890,7 +1039,11 @@ sub readFile
     return \@lines;
 }
 
-
+sub getNewUUID
+{
+    my $ug = Data::UUID->new;
+    return lc $ug->create_str(); #lowercasing alphabetic characters
+}
 
 sub DESTROY
 {

@@ -95,14 +95,24 @@
     become: yes
     environment:
       PATH: "{{ ansible_env.PATH }}"
-    shell: cd /configs && java -Dhost={{ local_ip }} -Dokapiurl="http://{{ local_ip }}:9130" -Dport_end=9230 -Dstorage=postgres -Dpostgres_host={{ pg_host }} -Dpostgres_port={{ pg_port }} -Dpostgres_username={{ pg_okapi_user }} -Dpostgres_password={{ pg_okapi_pass }} -Dpostgres_database={{ pg_okapi_db }} -jar okapi/okapi-core/target/okapi-core-fat.jar dev > logs/okapi.log &
+    shell: |
+      cd /configs && java -Dhost={{ local_ip }} \
+      -Dokapiurl="http://{{ local_ip }}:9130" \
+      -Dport_end=9230 -Dstorage=postgres \
+      -Dpostgres_host={{ pg_host }} \
+      -Dpostgres_port={{ pg_port }} \
+      -Dpostgres_username={{ pg_okapi_user }} \
+      -Dpostgres_password={{ pg_okapi_pass }} \
+      -Dpostgres_database={{ pg_okapi_db }} \
+      -DdockerRegistries="[{}, {'registry': 'knowledgeintegration', 'serveraddress': 'docker.libsdev.k-int.com' }]" \
+      -jar okapi/okapi-core/target/okapi-core-fat.jar dev > logs/okapi.log &
 
 ### Waiting for OKAPI to get going
   - name: Pausing for OKAPI Service to finsih starting
     pause: seconds=15
 
-### Setup Tenants
-  - name: Setup Tenants http://folio-registry.aws.indexdata.com
+### Setup Modules
+  - name: pull Module descriptors http://folio-registry.aws.indexdata.com
     become: yes
     environment:
       PATH: "{{ ansible_env.PATH }}"
@@ -111,7 +121,7 @@
       -d '{"urls" : ["http://folio-registry.aws.indexdata.com"]}'
       http://localhost:9130/_/proxy/pull/modules
 
-  - name: Setup Tenants https://registry.reshare-dev.indexdata.com
+  - name: pull Module descriptors https://registry.reshare-dev.indexdata.com
     become: yes
     environment:
       PATH: "{{ ansible_env.PATH }}"
@@ -120,13 +130,22 @@
       -d '{"urls" : ["https://registry.reshare-dev.indexdata.com"]}'
       http://localhost:9130/_/proxy/pull/modules
 
-  - name: Setup Tenants reshare
+  - name: Setup Tenants dev1
     become: yes
     environment:
       PATH: "{{ ansible_env.PATH }}"
     shell: >
       curl -w '\n' -D - -X POST -H "Content-type: application/json"
-      -d '{"id":"reshare","name":"ReShare","description":"ReShare Tenant"}'
+      -d '{"id":"dev1_tenant","name":"Dev1 Reshare","description":"Dev1 Reshare"}'
+      http://localhost:9130/_/proxy/tenants
+
+  - name: Setup Tenants dev2
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-type: application/json"
+      -d '{"id":"dev2_tenant","name":"Dev2 Reshare","description":"Dev2 Reshare"}'
       http://localhost:9130/_/proxy/tenants
 
   - name: Setup Tenants okapi
@@ -136,7 +155,16 @@
     shell: >
       curl -w '\n' -D - -X POST -H "Content-type: application/json"
       -d '{"id":"okapi"}' \
-      http://localhost:9130/_/proxy/tenants/reshare/modules
+      http://localhost:9130/_/proxy/tenants/dev1_tenant/modules
+
+  - name: Setup Tenants okapi
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      curl -w '\n' -D - -X POST -H "Content-type: application/json"
+      -d '{"id":"okapi"}' \
+      http://localhost:9130/_/proxy/tenants/dev2_tenant/modules
 
   - name: Setup OKAPI Environment DB_HOST
     become: yes
@@ -247,9 +275,6 @@
     shell: cd /configs/platform-rs && git reset --hard && git clean -x -f -d && git checkout {{ reshare_git_branch }}
     when: platform_git.stat.exists
 
-  - name: Editing config stripes.config.js
-    lineinfile: "dest=/configs/platform-rs/stripes.config.js state=present regexp='okapi: {' line=' okapi: { \\'url\\':\\'http://{{ local_ip }}:9130\\', \\'tenant\\':\\'reshare\\' },'"
-
 ## NVM version hack
   - name: Install Node 12.22.7 - known good version
     become: yes
@@ -265,20 +290,48 @@
       PATH: "{{ ansible_env.PATH }}"
     shell: cd /configs/platform-rs && yarn config set @folio:registry https://repository.folio.org/repository/npm-folio/
 
-  - name: ReShare platform-rs yarn install and build
+  - name: Editing config stripes.config.js for dev1_tenant
+    lineinfile: 
+      path: /configs/platform-rs/stripes.config.js
+      state: present
+      regexp: "^\\s?[^/]*okapi:\\s?{"
+      line: "okapi: { 'url':'http://{{ local_ip }}:9130', 'tenant':'dev1_tenant' },"
+
+  - name: ReShare platform-rs yarn install and build dev1
     become: yes
     environment:
       PATH: "{{ ansible_env.PATH }}"
-    shell: source /root/.nvm/nvm.sh && cd /configs/platform-rs && nvm use 12.22.7 && yarn install && yarn build
+    shell: source /root/.nvm/nvm.sh && cd /configs/platform-rs && nvm use 12.22.7 && yarn install && yarn build --tenant dev1_tenant
     args:
       executable: /bin/bash
 
-  - name: Copy the website into production folder cp -a output /usr/share/nginx/reshare
+  - name: Copy the website into production folder cp -a output /usr/share/nginx/dev1
     become: yes
     environment:
       PATH: "{{ ansible_env.PATH }}"
-    shell: cd /configs/platform-rs && cp -a output /usr/share/nginx/reshare
-    
+    shell: cd /configs/platform-rs && cp -a output /usr/share/nginx/dev1 && rm -Rf output
+
+  - name: Editing config stripes.config.js for dev2_tenant
+    lineinfile: 
+      path: /configs/platform-rs/stripes.config.js
+      state: present
+      regexp: "^\\s?[^/]*okapi:\\s?{"
+      line: "okapi: { 'url':'http://{{ local_ip }}:9130', 'tenant':'dev2_tenant' },"
+
+  - name: ReShare platform-rs yarn install and build dev2
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: source /root/.nvm/nvm.sh && cd /configs/platform-rs && nvm use 12.22.7 && yarn install && yarn build --tenant dev2_tenant
+    args:
+      executable: /bin/bash
+
+  - name: Copy the website into production folder cp -a output /usr/share/nginx/dev2
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: cd /configs/platform-rs && cp -a output /usr/share/nginx/dev2
+
   - name: Create nginx config /etc/nginx/sites-available/reshare
     copy:
       dest: /etc/nginx/sites-available/reshare
@@ -290,7 +343,22 @@
             # Serve index.html for any request not found
             location / {
               # Set path
-              root /usr/share/nginx/reshare;
+              root /usr/share/nginx/dev1;
+              include mime.types;
+              types {
+                text/plain lock;
+              }
+              try_files $uri /index.html;
+            }
+          }
+          server {
+            listen 81;
+            server_name localhost;
+            charset utf-8;
+            # Serve index.html for any request not found
+            location / {
+              # Set path
+              root /usr/share/nginx/dev2;
               include mime.types;
               types {
                 text/plain lock;
@@ -322,22 +390,52 @@
       name: nginx
       state: restarted
 
-  - name: Editing config okapi-install.json
-    lineinfile: "dest=/configs/platform-rs/okapi-install.json state=present regexp='{{ item.name }}-\\d' line='    \"id\": \"{{ item.name }}-{{ item.version }}\",'"
+  - name: Editing config folio-install.json
+    lineinfile: "dest=/configs/platform-rs/folio-install.json state=present regexp='{{ item.name }}-\\d' line='    \"id\": \"{{ item.name }}-{{ item.version }}\",'"
     loop: "{{ module_version_override|default([]) }}"
     when: item.version != "default"
   
-  - name: Turning on ReShare
+  - name: Turning on folio dev1
     become: yes
     environment:
       PATH: "{{ ansible_env.PATH }}"
     shell: >
       cd /configs && 
       curl -w '\n' -D - -X POST -H "Content-Type: application/json"
-      -d @platform-rs/okapi-install.json
-      http://localhost:9130/_/proxy/tenants/reshare/install?deploy=true\&preRelease=false\&tenantParameters=loadReference%3Dtrue
-  
-  - name: Enabling UI Modules (Stripes)
+      -d @platform-rs/folio-install.json
+      http://localhost:9130/_/proxy/tenants/dev1_tenant/install?deploy=true\&preRelease=false\&tenantParameters=loadReference%3Dtrue
+   
+  - name: Turning on ReShare dev1
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      cd /configs && 
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d @platform-rs/reshare-install.json
+      http://localhost:9130/_/proxy/tenants/dev1_tenant/install?deploy=true\&tenantParameters=loadSample%3Dtrue
+   
+  - name: Turning on folio dev2
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      cd /configs && 
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d @platform-rs/folio-install.json
+      http://localhost:9130/_/proxy/tenants/dev2_tenant/install?deploy=true\&preRelease=false\&tenantParameters=loadReference%3Dtrue
+   
+  - name: Turning on ReShare dev2
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      cd /configs && 
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d @platform-rs/reshare-install.json
+      http://localhost:9130/_/proxy/tenants/dev2_tenant/install?deploy=true\&tenantParameters=loadSample%3Dtrue
+ 
+  - name: Enabling UI Modules (Stripes) dev1
     become: yes
     environment:
       PATH: "{{ ansible_env.PATH }}"
@@ -345,9 +443,19 @@
       cd /configs && 
       curl -w '\n' -D - -X POST -H "Content-Type: application/json"
       -d @platform-rs/stripes-install.json
-      http://localhost:9130/_/proxy/tenants/reshare/install?preRelease=false
+      http://localhost:9130/_/proxy/tenants/dev1_tenant/install?preRelease=false
+  
+  - name: Enabling UI Modules (Stripes) dev2
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      cd /configs && 
+      curl -w '\n' -D - -X POST -H "Content-Type: application/json"
+      -d @platform-rs/stripes-install.json
+      http://localhost:9130/_/proxy/tenants/dev2_tenant/install?preRelease=false
 
-### ReShare Default Admin
+### ReShare Create super users
 ### Install libjson-perl
   - name: Install libjson-perl
     become: yes
@@ -384,8 +492,41 @@
     shell: cd /configs && wget https://raw.githubusercontent.com/folio-org/folio-install/master/runbooks/single-server/scripts/bootstrap-superuser.pl
     when: reshare_user_create and not superuser_script.stat.exists
 
+### Create a bash script to watch for the number of docker containers running
+  - name: Create a bash script
+    copy:
+      dest: /configs/number_of_containers
+      content: |
+          #!/bin/bash
+          CONTAINERNUM=`docker ps | wc -l`
+          while [  $CONTAINERNUM -lt 15 ]; do
+            sleep 1
+            CONTAINERNUM=`docker ps | wc -l`
+          done
+          echo '' > /configs/ready
+
+  - name: Change bash script to executable
+    ansible.builtin.file:
+      path: /configs/number_of_containers
+      mode: '0755'
+
+  - name: Remove ready file
+    ansible.builtin.file:
+      path: /configs/ready
+      state: absent
+
+  - name: Waiting for the container count to rise above 15
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: cd /configs && ./number_of_containers
+
+  - name: Pausing for another 60 seconds to make sure that all the containers have had time to do their thing
+    pause: seconds=60
+    when: reshare_user_create
+
 ### Install Admin user
-  - name: Install Admin user
+  - name: Install Admin user dev1
     become: yes
     ignore_errors: yes
     when: reshare_user_create
@@ -394,7 +535,20 @@
     shell: >
       cd /configs &&
       perl bootstrap-superuser.pl
-      --tenant reshare --user {{ reshare_admin_user }}
+      --tenant dev1_tenant --user {{ reshare_admin_user }}
+      --password {{ reshare_admin_password }}
+      --okapi http://{{ local_ip }}:9130
+
+  - name: Install Admin user dev2
+    become: yes
+    ignore_errors: yes
+    when: reshare_user_create
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: >
+      cd /configs &&
+      perl bootstrap-superuser.pl
+      --tenant dev2_tenant --user {{ reshare_admin_user }}
       --password {{ reshare_admin_password }}
       --okapi http://{{ local_ip }}:9130
 
