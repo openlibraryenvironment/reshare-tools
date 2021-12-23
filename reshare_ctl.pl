@@ -17,7 +17,7 @@
 # ---------------------------------------------------------------
 
 
-my @neededPorts = (80,443,9130,5432,32);
+my @neededPorts = (80,81,443,9130,5432,32);
 my $kafkaFullName = "wurstmeister/kafka";
 my $zookeeperFullName = "wurstmeister/zookeeper";
 
@@ -135,18 +135,22 @@ sub checkVarsFile
         # Consume all those juicy variables
         %env = %{readConfig($vars_file)};
         errorOut("vars.yml does not specify an ip address (local_ip)") unless $env{"local_ip"};
-        if($env{"local_ip"} ne $local_ip)
+        if($local_ip =~ /^\d+\.\d+\.\d+\.\d+$/) # We might have guessed the IPv6 address. if we did, we want to ignore this warning
         {
-            promptUser(
-                boxText("NOTICE") .
-                boxText(
-                    "IP address config conflict\n".
-                    "detected IP: '$local_ip'\n".
-                    "vars.yml IP: '" . $env{"local_ip"} . "'\n"
-                    ," ","|",2) . 
-                    "You can cancel execution now or press enter to continue\n" , 0
-            );
+            if($env{"local_ip"} ne $local_ip)
+            {
+                promptUser(
+                    boxText("NOTICE") .
+                    boxText(
+                        "IP address config conflict\n".
+                        "detected IP: '$local_ip'\n".
+                        "vars.yml IP: '" . $env{"local_ip"} . "'\n"
+                        ," ","|",2) . 
+                        "You can cancel execution now or press enter to continue\n" , 0
+                );
+            }
         }
+        $local_ip = $env{"local_ip"};
 
     }
     elsif(!(-e $vars_file_example))
@@ -303,10 +307,11 @@ sub dealWithMasterImage
             "-p 32:22 " .
             "-v /var/run/docker.sock:/var/run/docker.sock " .
             "-v $vars_file:/configs/vars.yml " .
-            "-v /mnt/evergreen/docker/reshare/entrypoint.yml:/configs/entrypoint.yml " .
+            # "-v /mnt/evergreen/docker/reshare/entrypoint.yml:/configs/entrypoint.yml " . # debugging
             "$imageName &";
             execSystemCMD($cmd, 1);
         }
+        promptUser(boxText("The master container was just started, therefore will need at least 2 minutes to get the rest of itself setup","!","!","2"));
     }
     elsif($do =~ /stop/ && !$runningContainer && !$ignoreStopped)
     {
@@ -344,7 +349,7 @@ sub dealWithSetupTestData
     my $cardinalJSON = '{ '.
     '"name":"Cardinal test Consortium", '.
     '"slug":"CARDINAL", '.
-    '"foafUrl":"http://$local_ip/cardinal.json", '.
+    '"foafUrl":"http://'.$local_ip.'/cardinal.json", '.
     '"url":"http://not.a.real.consortium/", '.
     '"type":"Consortium", '.
     '"members":[ '.
@@ -352,8 +357,8 @@ sub dealWithSetupTestData
         ' { "memberOrg":"dev2"} '.
     '], '.
     '"friends":[ '.
-        '{ "foaf": "http://$local_ip:9130/_/invoke/tenant/dev1_tenant/directory/externalApi/entry/dev1" }, '.
-        '{ "foaf": "https://$local_ip:9130/_/invoke/tenant/dev2_tenant/directory/externalApi/entry/dev2" } '.
+        '{ "foaf": "http://'.$local_ip.':9130/_/invoke/tenant/dev1_tenant/directory/externalApi/entry/dev1" }, '.
+        '{ "foaf": "https://'.$local_ip.':9130/_/invoke/tenant/dev2_tenant/directory/externalApi/entry/dev2" } '.
     '] }';
 
     my $imageName = getDockerID($masterLabel, 0, 1);
@@ -373,13 +378,14 @@ sub dealWithSetupTestData
                 promptUser(boxText("Couldn't get logged into $tenant. Check your vars.yml for correct admin login creds.") );
                 exit;
             }
-            if($do eq 'setuptestbranches')
+            if($do eq 'setupconsortium')
             {
-                $cardinalJSON =~ s/"/\\\\"/g;
+                # a shell command inside a shell command inside a perl script.
+                # Triple backslashes to escape the quotation marks three times
+                $cardinalJSON =~ s/"/\\\\\\"/g;
                 my $cmd = "sh -c \"echo $cardinalJSON > /usr/share/nginx/dev1/cardinal.json\"";
                 execDockerCMD($imageName, $cmd, 1);
-                sendConsortiumSetup($authtoken);
-                
+                sendConsortiumSetup($authtoken, $tenant);
             }
             elsif($do eq 'setupserviceaccounts')
             {
@@ -406,8 +412,41 @@ sub dealWithSetupTestData
             }
             elsif($do eq 'setupinstitutions')
             {
-                # my @serviceAccounts = @{getExistingDirectoryServiceAccounts($authtoken, $tenant)};
-                getDirectoryRef($authtoken, $tenant, "DirectoryEntry.Type");
+                my $tenantroot = $tenant;
+                $tenantroot =~ s/([\_]*)_.*/$1/; #chopping off "tenant" from the name
+                my %accountDef =
+                (
+                    'phoneNumber' => $tenantroot . "_phone_number",
+                    'contactName' => $tenantroot . "_main_contact",
+                    'slug' => $tenantroot . "_institution",
+                    'emailAddress' => $tenantroot . "_emailaddress",
+                    'name' => $tenantroot,
+                    'type' => "institution", # gets replaced with the Server ID string equivalent
+                    'status' => 'managed', # gets replaced with the Server ID string equivalent
+                    'id' => getNewUUID()
+                );
+                my @symbolDef =
+                (
+                    {
+                        '_delete' => 'false',
+                        'authority' => { 'id' => "ISIL" }, # gets replaced with the Server ID string equivalent
+                        'symbol' => $tenantroot . "_ISIL_SYMBOL"
+                    }
+                );
+                my @servicesDef =
+                (
+                    {
+                        '_delete' => 'false',
+                        'service' => { 'id' => "iso18626" }, # gets replaced with the Server ID string equivalent
+                        'slug' => $tenantroot . "_institution_ISO18626"
+                    },
+                    {
+                        '_delete' => 'false',
+                        'service' => { 'id' => "stats" }, # gets replaced with the Server ID string equivalent
+                        'slug' => $tenantroot . "_institution_stats"
+                    }
+                );
+                createInstitution($authtoken, $tenant, \%accountDef, \@symbolDef, \@servicesDef);
             }
         }
     }
@@ -440,7 +479,6 @@ sub sendConsortiumSetup
     my $url = "/directory/api/addFriend?friendUrl=$cardinalURL";
     my $answer = runHTTPReq($header,'', "GET", $url);
     print Dumper($answer);
-    exit;
 }
 
 sub getExistingDirectoryServiceAccounts
@@ -448,7 +486,7 @@ sub getExistingDirectoryServiceAccounts
     my $authtoken = shift;
     my $tenant = shift;
     my $header = standardAuthHeader($authtoken, $tenant);
-    my $resp = runHTTPReq($header, undef, "GET", "/directory/service?filters=status.value=managed&perPage=100&sort=id");
+    my $resp = runHTTPReq($header, undef, "GET", "/directory/service?filters=status.value=managed&sort=id");
     my $ret = decode_json($resp->content);
     return $ret;
 }
@@ -458,15 +496,85 @@ sub createDirectoryServiceAccount
     my $authtoken = shift;
     my $tenant = shift;
     my $defRef = shift;
-    my %def = %{$defRef};
 
     my $header = standardAuthHeader($authtoken, $tenant);
 
-    my %options = %{getDirectoryServiceDropdownOptions($authtoken, $tenant)};
+    my $optionsRef = getDirectoryServiceDropdownOptions($authtoken, $tenant);
+    $defRef = substituteServerIDs($defRef, $optionsRef, "value");
 
-    while ( (my $key, my $option) = each(%options) )
+    runHTTPReq($header, encode_json($defRef), "POST", "/directory/service");
+}
+
+sub createInstitution
+{
+    my $authtoken = shift;
+    my $tenant = shift;
+    my $defRef = shift;
+    my $symbolRef = shift;
+    my $serviceRef = shift;
+
+    my $header = standardAuthHeader($authtoken, $tenant);
+
+    my @symbolDef = @{$symbolRef};
+    my @serviceDef = @{$serviceRef};
+
+    my @existingServiceAccounts = @{getExistingDirectoryServiceAccounts($authtoken, $tenant)};
+    my $serverIDs = getInstitionDropdownOptions($authtoken, $tenant);
+    my @authorityNames = @{getDirectoryNamingAuthority($authtoken, $tenant)};
+
+    # Convert the standard OKAPI stuff (type, status)
+    $defRef = substituteServerIDs($defRef, $serverIDs, "value");
+
+    # Do the ID replacements for the Pre-created "Service" Accounts
+    foreach(@existingServiceAccounts)
     {
-        while ( (my $defkey, my $defoption) = each(%def) )
+        my $existingName = lc $_->{"name"};
+        my $existingID = $_->{"id"};
+        foreach(@serviceDef)
+        {
+            my $thisMatch = lc $_->{"service"}->{"id"};
+            print "testing: '$existingName' = '$thisMatch'\n" if $debug;
+            if($existingName =~ /$thisMatch/)
+            {
+                print "converting '$thisMatch' to '$existingID'\n" if $debug;
+                $_->{"service"}->{"id"} = $existingID
+            }
+        }
+    }
+    $defRef->{"services"} = \@serviceDef;
+
+    # Do the ID replacements for the "Symbols" (Authority)
+    foreach(@authorityNames)
+    {
+        my $existingName = lc $_->{"symbol"};
+        my $existingID = $_->{"id"};
+        foreach(@symbolDef)
+        {
+            my $thisMatch = lc $_->{"authority"}->{"id"};
+            print "testing: '$existingName' = '$thisMatch'\n" if $debug;
+            if($existingName =~ /$thisMatch/)
+            {
+                print "converting '$thisMatch' to '$existingID'\n" if $debug;
+                $_->{"authority"}->{"id"} = $existingID
+            }
+        }
+    }
+    $defRef->{"symbols"} = \@symbolDef;
+
+    my $answer = runHTTPReq($header, encode_json($defRef), "POST", "/directory/entry");
+}
+
+sub substituteServerIDs
+{
+    my $localDefRef = shift;
+    my $serverDefRef = shift;
+    my $expectedCompareStringKey = shift || "value";
+
+    my %localDef = %{$localDefRef};
+    my %serverDef = %{$serverDefRef};
+    while ( (my $key, my $option) = each(%serverDef) )
+    {
+        while ( (my $defkey, my $defoption) = each(%localDef) )
         {
             if($defkey eq $key)  # we have a dropdown menu key that needs converted into the server ID equivalent.
             {
@@ -475,18 +583,18 @@ sub createDirectoryServiceAccount
                 foreach(@list)
                 {
                     my %menuItem = %{$_};
-                    print "Checking '".$menuItem{"value"}."'\n" if $debug;
-                    if($menuItem{"value"} eq $defoption)
+                    print "Checking '".$menuItem{$expectedCompareStringKey}."'\n" if $debug;
+                    if($menuItem{$expectedCompareStringKey} eq $defoption)
                     {
                         $convert = $menuItem{"id"};
                         print "Converted '$defoption' to '$convert'\n" if $debug;
                     }
                 }
-                $def{$defkey} = $convert;
+                $localDef{$defkey} = $convert;
             }
         }
     }
-    runHTTPReq($header, encode_json(\%def), "POST", "/directory/service");
+    return \%localDef;
 }
 
 sub getDirectoryServiceDropdownOptions
@@ -497,7 +605,26 @@ sub getDirectoryServiceDropdownOptions
     my %dropdowns = 
     (
         'businessFunction' => "Service.BusinessFunction",
-        'type' => "Service.Type"
+        'type' => "Service.Type",
+        'status' => "DirectoryEntry.Status"
+    );
+    my %ret = ();
+    while ( (my $internal, my $querystring) = each(%dropdowns) )
+    {
+        $ret{$internal} = getDirectoryRef($authtoken, $tenant, $querystring);
+    }
+    return \%ret;
+}
+
+sub getInstitionDropdownOptions
+{
+    my $authtoken = shift;
+    my $tenant = shift;
+    my $header = standardAuthHeader($authtoken, $tenant);
+    my %dropdowns = 
+    (
+        'type' => "DirectoryEntry.Type",
+        'status' => "DirectoryEntry.Status"
     );
     my %ret = ();
     while ( (my $internal, my $querystring) = each(%dropdowns) )
@@ -515,7 +642,7 @@ sub getDirectoryRef
     my $header = standardAuthHeader($authtoken, $tenant);
     my @ret = ();
     my $url = "/directory/refdata?filters=desc=$type";
-    print "$url\n";
+    print "Data gather: $url\n" if $debug;
     my $response = runHTTPReq($header, undef, "GET", $url);
     my $stuff = decode_json($response->content);
     my @vals = @{$stuff};
@@ -523,12 +650,30 @@ sub getDirectoryRef
     {
         if(%{$_}{"values"})
         {
-            my @answers = @{%{$_}{"values"}};
+            my @answers = @{%{$_}{"values"}}; # Array of HASH's
             foreach(@answers)
             {
                 push (@ret, $_);
             }
         }
+    }
+    return \@ret;
+}
+
+sub getDirectoryNamingAuthority
+{
+    my $authtoken = shift;
+    my $tenant = shift;
+    my $header = standardAuthHeader($authtoken, $tenant);
+    my @ret = ();
+    my $url = "/directory/namingAuthority";
+    print "Data gather: $url\n" if $debug;
+    my $response = runHTTPReq($header, undef, "GET", $url);
+    my $stuff = decode_json($response->content);
+    my @vals = @{$stuff};
+    foreach(@vals)
+    {
+        push (@ret, $_);
     }
     return \@ret;
 }
