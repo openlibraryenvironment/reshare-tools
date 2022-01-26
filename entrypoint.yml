@@ -284,6 +284,12 @@
     args:
       executable: /bin/bash
 
+  - name: Manually download some docker images
+    become: yes
+    environment:
+      PATH: "{{ ansible_env.PATH }}"
+    shell: docker pull docker.libsdev.k-int.com/knowledgeintegration/mod-rs:2.4.0 && docker pull docker.libsdev.k-int.com/knowledgeintegration/mod-directory:2.4.0
+
   - name: ReShare platform-rs yarn config setup
     become: yes
     environment:
